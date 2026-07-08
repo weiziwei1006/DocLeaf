@@ -14,8 +14,14 @@ public class ApiInfo {
     /** 所属 Controller 类的简单名称（如 UserController） */
     private String controllerName;
 
+    /** Controller 的描述（来自类级 JavaDoc 首句，无则为 null） */
+    private String controllerDescription;
+
     /** 方法名（作为接口描述的默认值） */
     private String methodName;
+
+    /** 接口描述（来自方法 JavaDoc 首句，无则为方法名） */
+    private String description;
 
     /** 请求路径集合（如 /api/users/{id}），一个方法可能映射多个路径 */
     private Set<String> paths;
@@ -29,6 +35,9 @@ public class ApiInfo {
     /** 返回值类型描述（如 User 或 ResponseEntity&lt;User&gt;） */
     private String returnType;
 
+    /** 返回值描述（来自 @return 标签，无则为 null） */
+    private String returnDescription;
+
     // ==================== Getters & Setters ====================
 
     public String getControllerName() {
@@ -39,12 +48,28 @@ public class ApiInfo {
         this.controllerName = controllerName;
     }
 
+    public String getControllerDescription() {
+        return controllerDescription;
+    }
+
+    public void setControllerDescription(String controllerDescription) {
+        this.controllerDescription = controllerDescription;
+    }
+
     public String getMethodName() {
         return methodName;
     }
 
     public void setMethodName(String methodName) {
         this.methodName = methodName;
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
     }
 
     public Set<String> getPaths() {
@@ -79,15 +104,26 @@ public class ApiInfo {
         this.returnType = returnType;
     }
 
+    public String getReturnDescription() {
+        return returnDescription;
+    }
+
+    public void setReturnDescription(String returnDescription) {
+        this.returnDescription = returnDescription;
+    }
+
     @Override
     public String toString() {
         return "ApiInfo{" +
                 "controllerName='" + controllerName + '\'' +
+                ", controllerDescription='" + controllerDescription + '\'' +
                 ", methodName='" + methodName + '\'' +
+                ", description='" + description + '\'' +
                 ", paths=" + paths +
                 ", httpMethods=" + httpMethods +
                 ", params=" + params +
                 ", returnType='" + returnType + '\'' +
+                ", returnDescription='" + returnDescription + '\'' +
                 '}';
     }
 }

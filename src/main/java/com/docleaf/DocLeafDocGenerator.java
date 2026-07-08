@@ -2,9 +2,11 @@ package com.docleaf;
 
 import com.docleaf.model.ApiInfo;
 import com.docleaf.model.ApiParamInfo;
+import com.docleaf.javadoc.JavaDocExtractor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.DefaultParameterNameDiscoverer;
@@ -22,6 +24,7 @@ import org.springframework.web.servlet.mvc.method.RequestMappingInfo;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -30,6 +33,7 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -67,6 +71,17 @@ public class DocLeafDocGenerator implements ApplicationRunner {
     @Autowired
     private RequestMappingHandlerMapping handlerMapping;
 
+    /** 源码根目录（可配置，默认为 src/main/java） */
+    @Value("${docleaf.source-root:src/main/java}")
+    private String sourceRoot;
+
+    /** 是否启用 JavaDoc 提取（默认启用） */
+    @Value("${docleaf.javadoc.enabled:true}")
+    private boolean javaDocEnabled;
+
+    /** JavaDoc 提取器（延迟初始化） */
+    private JavaDocExtractor javaDocExtractor;
+
     // ========================================================================
     // 主流程
     // ========================================================================
@@ -74,6 +89,16 @@ public class DocLeafDocGenerator implements ApplicationRunner {
     @Override
     public void run(ApplicationArguments args) {
         log.info("DocLeaf 开始扫描 API 接口...");
+
+        // 初始化 JavaDoc 提取器（如果启用）
+        if (javaDocEnabled) {
+            String baseDir = System.getProperty("user.dir");
+            Path fullSourcePath = Paths.get(baseDir, sourceRoot);
+            javaDocExtractor = new JavaDocExtractor(fullSourcePath.toString());
+            log.info("JavaDoc 提取已启用，源码根目录：{}", fullSourcePath.toAbsolutePath());
+        } else {
+            log.info("JavaDoc 提取已禁用，接口描述将使用方法名。");
+        }
 
         // 1. 获取所有 Handler 方法映射
         Map<RequestMappingInfo, HandlerMethod> handlerMethods = handlerMapping.getHandlerMethods();
@@ -84,6 +109,8 @@ public class DocLeafDocGenerator implements ApplicationRunner {
 
         // 2. 遍历并提取信息，按 Controller 类名归类（使用 LinkedHashMap 保持插入顺序）
         Map<String, List<ApiInfo>> controllerApiMap = new LinkedHashMap<>();
+        // 记录每个 Controller 的 Class 对象，用于提取类级 JavaDoc
+        Map<String, Class<?>> controllerClassMap = new HashMap<>();
         int totalApiCount = 0;
 
         for (Map.Entry<RequestMappingInfo, HandlerMethod> entry : handlerMethods.entrySet()) {
@@ -105,12 +132,28 @@ public class DocLeafDocGenerator implements ApplicationRunner {
             // 按 Controller 类名归类
             String controllerName = apiInfo.getControllerName();
             controllerApiMap.computeIfAbsent(controllerName, k -> new ArrayList<>()).add(apiInfo);
+            controllerClassMap.putIfAbsent(controllerName, beanType);
             totalApiCount++;
         }
 
         if (controllerApiMap.isEmpty()) {
             log.warn("未发现用户自定义的 API 接口，跳过文档生成。");
             return;
+        }
+
+        // 2.5 提取 Controller 类级别的 JavaDoc 描述
+        if (javaDocExtractor != null) {
+            for (Map.Entry<String, Class<?>> entry : controllerClassMap.entrySet()) {
+                String controllerName = entry.getKey();
+                Class<?> controllerClass = entry.getValue();
+                String classDesc = javaDocExtractor.getClassDescription(controllerClass);
+                // 将类描述设置到该 Controller 下的每个 ApiInfo 上
+                if (classDesc != null) {
+                    for (ApiInfo api : controllerApiMap.get(controllerName)) {
+                        api.setControllerDescription(classDesc);
+                    }
+                }
+            }
         }
 
         // 3. 生成 Markdown 内容
@@ -163,6 +206,34 @@ public class DocLeafDocGenerator implements ApplicationRunner {
 
         // 返回值类型（如 User 或 ResponseEntity<User>）
         apiInfo.setReturnType(extractReturnType(handlerMethod));
+
+        // ====== 阶段二新增：提取 JavaDoc 描述 ======
+        if (javaDocExtractor != null) {
+            Class<?> beanType = handlerMethod.getBeanType();
+            Method method = handlerMethod.getMethod();
+
+            // 方法描述（首句）
+            String description = javaDocExtractor.getMethodDescription(beanType, method);
+            apiInfo.setDescription(description);
+
+            // 返回值描述（@return）
+            String returnDesc = javaDocExtractor.getReturnDescription(beanType, method);
+            apiInfo.setReturnDescription(returnDesc);
+
+            // 参数描述（@param）
+            Map<String, String> paramDescs = javaDocExtractor.getParamDescriptions(beanType, method);
+            if (!paramDescs.isEmpty()) {
+                for (ApiParamInfo param : apiInfo.getParams()) {
+                    String paramDesc = paramDescs.get(param.getName());
+                    if (paramDesc != null) {
+                        param.setDescription(paramDesc);
+                    }
+                }
+            }
+        } else {
+            // 未启用 JavaDoc 提取时，使用方法名作为描述
+            apiInfo.setDescription(apiInfo.getMethodName());
+        }
 
         return apiInfo;
     }
@@ -554,6 +625,12 @@ public class DocLeafDocGenerator implements ApplicationRunner {
             // 二级标题：Controller 类名
             sb.append("## ").append(controllerName).append("\n\n");
 
+            // Controller 描述（来自类级 JavaDoc）
+            if (apiList.get(0).getControllerDescription() != null
+                    && !apiList.get(0).getControllerDescription().isEmpty()) {
+                sb.append("> ").append(apiList.get(0).getControllerDescription()).append("\n\n");
+            }
+
             // 接口表格
             sb.append("| # | 接口描述 | 请求方法 | 请求路径 | 参数详情 | 返回值 |\n");
             sb.append("|---|---------|---------|---------|---------|-------|\n");
@@ -561,11 +638,18 @@ public class DocLeafDocGenerator implements ApplicationRunner {
             int index = 1;
             for (ApiInfo api : apiList) {
                 sb.append("| ").append(index++).append(" ");
-                sb.append("| ").append(api.getMethodName()).append(" ");
+                // 接口描述：优先使用 JavaDoc 描述，回退为方法名
+                String desc = api.getDescription() != null ? api.getDescription() : api.getMethodName();
+                sb.append("| ").append(desc).append(" ");
                 sb.append("| ").append(String.join(" / ", api.getHttpMethods())).append(" ");
                 sb.append("| `").append(String.join("`, `", api.getPaths())).append("` ");
                 sb.append("| ").append(formatParams(api.getParams())).append(" ");
-                sb.append("| `").append(api.getReturnType()).append("` |\n");
+                // 返回值：类型 + 描述
+                sb.append("| `").append(api.getReturnType()).append("`");
+                if (api.getReturnDescription() != null && !api.getReturnDescription().isEmpty()) {
+                    sb.append(" — ").append(api.getReturnDescription());
+                }
+                sb.append(" |\n");
             }
             sb.append("\n");
         }
@@ -578,6 +662,7 @@ public class DocLeafDocGenerator implements ApplicationRunner {
      * <p>
      * 多个参数使用 {@code <br>} 换行分隔，每个参数格式为：
      * {@code `参数名` (来源, 类型, 必填/可选[, 默认值])}
+     * 如果有 @param 描述，在括号后追加 “— 描述”。
      */
     private String formatParams(List<ApiParamInfo> params) {
         if (params == null || params.isEmpty()) {
@@ -598,6 +683,10 @@ public class DocLeafDocGenerator implements ApplicationRunner {
                 sb.append(", 默认: `").append(p.getDefaultValue()).append("`");
             }
             sb.append(")");
+            // 追加 @param 描述
+            if (p.getDescription() != null && !p.getDescription().isEmpty()) {
+                sb.append(" — ").append(p.getDescription());
+            }
         }
         return sb.toString();
     }

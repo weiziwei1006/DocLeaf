@@ -24,6 +24,9 @@ public class ApiParamInfo {
     /** 默认值（仅 @RequestParam 等可能存在，无则为 null） */
     private String defaultValue;
 
+    /** 参数描述（来自 JavaDoc @param 标签，无则为 null） */
+    private String description;
+
     // ==================== Getters & Setters ====================
 
     public String getName() {
@@ -66,6 +69,14 @@ public class ApiParamInfo {
         this.defaultValue = defaultValue;
     }
 
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
+    }
+
     @Override
     public String toString() {
         return "ApiParamInfo{" +
@@ -74,6 +85,7 @@ public class ApiParamInfo {
                 ", type='" + type + '\'' +
                 ", required=" + required +
                 ", defaultValue='" + defaultValue + '\'' +
+                ", description='" + description + '\'' +
                 '}';
     }
 }
