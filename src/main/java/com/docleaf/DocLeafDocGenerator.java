@@ -11,6 +11,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.core.DefaultParameterNameDiscoverer;
 import org.springframework.core.MethodParameter;
 import org.springframework.core.ResolvableType;
@@ -58,7 +60,8 @@ import java.util.Set;
  *
  * @author DocLeaf
  */
-@Component
+@Configuration
+@EnableConfigurationProperties(DocLeafProperties.class)
 public class DocLeafDocGenerator implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(DocLeafDocGenerator.class);
