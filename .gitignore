@@ -1,7 +1,7 @@
 HELP.md
-API_DOCUMENTATION.md
 demo/
 target/
+outdoc/
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/

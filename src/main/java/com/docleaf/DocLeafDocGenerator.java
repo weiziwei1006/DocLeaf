@@ -3,10 +3,12 @@ package com.docleaf;
 import com.docleaf.model.ApiInfo;
 import com.docleaf.model.ApiParamInfo;
 import com.docleaf.javadoc.JavaDocExtractor;
+import com.docleaf.config.DocLeafProperties;
+import com.docleaf.generator.OpenApiGenerator;
+import com.docleaf.generator.HtmlPreviewGenerator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.core.DefaultParameterNameDiscoverer;
@@ -61,8 +63,8 @@ public class DocLeafDocGenerator implements ApplicationRunner {
 
     private static final Logger log = LoggerFactory.getLogger(DocLeafDocGenerator.class);
 
-    /** 输出文件名 */
-    private static final String OUTPUT_FILE_NAME = "API_DOCUMENTATION.md";
+    /** Markdown 输出文件名 */
+    private static final String MD_FILE_NAME = "API_DOCUMENTATION.md";
 
     /** 参数名发现器，用于获取方法参数的真实名称（依赖 -parameters 编译参数或 ASM 字节码分析） */
     private final DefaultParameterNameDiscoverer parameterNameDiscoverer = new DefaultParameterNameDiscoverer();
@@ -71,13 +73,15 @@ public class DocLeafDocGenerator implements ApplicationRunner {
     @Autowired
     private RequestMappingHandlerMapping handlerMapping;
 
-    /** 源码根目录（可配置，默认为 src/main/java） */
-    @Value("${docleaf.source-root:src/main/java}")
-    private String sourceRoot;
+    /** DocLeaf 配置属性 */
+    @Autowired
+    private DocLeafProperties properties;
 
-    /** 是否启用 JavaDoc 提取（默认启用） */
-    @Value("${docleaf.javadoc.enabled:true}")
-    private boolean javaDocEnabled;
+    /** OpenAPI 生成器 */
+    private final OpenApiGenerator openApiGenerator = new OpenApiGenerator();
+
+    /** HTML 预览生成器 */
+    private final HtmlPreviewGenerator htmlGenerator = new HtmlPreviewGenerator();
 
     /** JavaDoc 提取器（延迟初始化） */
     private JavaDocExtractor javaDocExtractor;
@@ -91,9 +95,9 @@ public class DocLeafDocGenerator implements ApplicationRunner {
         log.info("DocLeaf 开始扫描 API 接口...");
 
         // 初始化 JavaDoc 提取器（如果启用）
-        if (javaDocEnabled) {
+        if (properties.isJavadocEnabled()) {
             String baseDir = System.getProperty("user.dir");
-            Path fullSourcePath = Paths.get(baseDir, sourceRoot);
+            Path fullSourcePath = Paths.get(baseDir, properties.getSourceRoot());
             javaDocExtractor = new JavaDocExtractor(fullSourcePath.toString());
             log.info("JavaDoc 提取已启用，源码根目录：{}", fullSourcePath.toAbsolutePath());
         } else {
@@ -156,27 +160,58 @@ public class DocLeafDocGenerator implements ApplicationRunner {
             }
         }
 
-        // 3. 生成 Markdown 内容
-        String markdown = generateMarkdown(controllerApiMap, totalApiCount);
+        // 3. 确定输出目录
+        String baseDir = System.getProperty("user.dir");
+        Path outputDir = Paths.get(baseDir, properties.getOutput().getDir());
 
-        // 4. 写入文件（输出到项目根目录 user.dir）
-        String outputDir = System.getProperty("user.dir");
-        Path outputPath = Paths.get(outputDir, OUTPUT_FILE_NAME);
-        try {
-            Files.write(outputPath, markdown.getBytes(StandardCharsets.UTF_8));
-        } catch (IOException e) {
-            log.error("文档写入失败: {}", e.getMessage(), e);
-            return;
+        // 4. 按配置的格式生成输出
+        DocLeafProperties.Output outputConfig = properties.getOutput();
+        List<String> generatedFiles = new ArrayList<>();
+
+        // 4.1 Markdown 输出
+        if (outputConfig.shouldOutput("markdown")) {
+            String markdown = generateMarkdown(controllerApiMap, totalApiCount);
+            Path mdPath = outputDir.resolve(MD_FILE_NAME);
+            try {
+                Files.createDirectories(outputDir);
+                Files.write(mdPath, markdown.getBytes(StandardCharsets.UTF_8));
+                generatedFiles.add(mdPath.toAbsolutePath().toString());
+            } catch (IOException e) {
+                log.error("Markdown 文档写入失败: {}", e.getMessage(), e);
+            }
+        }
+
+        // 4.2 OpenAPI JSON 输出
+        //     无论是否单独输出 openapi.json 文件，HTML 预览都需要 JSON 数据，
+        //     因此这里统一构建一次 JSON 字符串复用。
+        String openApiJson = openApiGenerator.buildJson(controllerApiMap);
+
+        if (outputConfig.shouldOutput("openapi")) {
+            Path openApiPath = openApiGenerator.writeJson(openApiJson, outputDir);
+            if (openApiPath != null) {
+                generatedFiles.add(openApiPath.toAbsolutePath().toString());
+            }
+        }
+
+        // 4.3 HTML 预览输出（内嵌 OpenAPI JSON，双击即可打开）
+        if (outputConfig.shouldOutput("html")) {
+            Path htmlPath = htmlGenerator.generate(outputDir, openApiJson);
+            if (htmlPath != null) {
+                generatedFiles.add(htmlPath.toAbsolutePath().toString());
+            }
         }
 
         // 5. 控制台输出成功提示（使用 UTF-8 编码，避免 Windows GBK 控制台乱码）
-        try {
-            java.io.PrintStream utf8Out = new java.io.PrintStream(System.out, true, "UTF-8");
-            utf8Out.println("✅ DocLeaf 文档已生成：" + outputPath.toAbsolutePath().toString());
-        } catch (java.io.UnsupportedEncodingException e) {
-            System.out.println("DocLeaf 文档已生成：" + outputPath.toAbsolutePath().toString());
+        for (String filePath : generatedFiles) {
+            try {
+                java.io.PrintStream utf8Out = new java.io.PrintStream(System.out, true, "UTF-8");
+                utf8Out.println("✅ DocLeaf 文档已生成：" + filePath);
+            } catch (java.io.UnsupportedEncodingException e) {
+                System.out.println("DocLeaf 文档已生成：" + filePath);
+            }
         }
-        log.info("DocLeaf 文档生成完成！共扫描 {} 个 Controller，{} 个接口。", controllerApiMap.size(), totalApiCount);
+        log.info("DocLeaf 文档生成完成！共扫描 {} 个 Controller，{} 个接口。输出 {} 个文件。",
+                controllerApiMap.size(), totalApiCount, generatedFiles.size());
     }
 
     // ========================================================================
